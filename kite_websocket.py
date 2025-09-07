@@ -24,7 +24,8 @@ QUANTITY_MAP = {}
 POSITIONS_TAKEN = {}
 
 MARKET_START = datetime.strptime("09:20:00", "%H:%M:%S").time()
-MARKET_END = datetime.strptime("15:00:00", "%H:%M:%S").time()
+MARKET_END = datetime.strptime("15:15:00", "%H:%M:%S").time()
+STRATEGY_END = datetime.strptime("15:00:00", "%H:%M:%S").time()
 #FROM_TIME_BREAKOUT = datetime(2025, 9, 5, 9, 15, 0)
 FROM_TIME_BREAKOUT = datetime.now().replace(hour=9, minute=15, second=0, microsecond=0)
 
@@ -55,12 +56,12 @@ class KiteWebSocket:
             return
             
         current_time = datetime.now().time()
-        if current_time < MARKET_START:
-            logger.info(f"Market not started yet | Current Time: {current_time}")
+        if current_time < MARKET_START or current_time > MARKET_END :
+            logger.info(f"Market not started yet or ended | Current Time: {current_time}")
             return
 
-        if current_time >= MARKET_END:   
-            logger.info(f"Market ended | Current Time: {current_time}")
+        if current_time >= STRATEGY_END:   
+            logger.info(f"Strategy ended | Current Time: {current_time}")
             stop_trading_and_exit(ws)
             return
 
