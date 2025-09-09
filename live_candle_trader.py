@@ -30,10 +30,12 @@ candle_logger.propagate = False
 # Trading configuration
 INITIAL_CAPITAL = 360000
 TOTAL_RISK_PERCENTAGE = 0.02
-MARKET_START = datetime.strptime("09:20:00", "%H:%M:%S").time()
+MARKET_START = datetime.strptime("09:10:00", "%H:%M:%S").time()  # Start strategy from 9:10
 MARKET_END = datetime.strptime("15:15:00", "%H:%M:%S").time()
 STRATEGY_END = datetime.strptime("15:00:00", "%H:%M:%S").time()
+TRADING_START = datetime.strptime("09:20:00", "%H:%M:%S").time()  # Start actual trading from 9:20
 BREAKOUT_START_TIME = datetime.now().replace(hour=9, minute=15, second=0, microsecond=0).time()
+BREAKOUT_END_TIME = datetime.now().replace(hour=9, minute=19, second=0, microsecond=0).time()
 
 class LiveCandleTrader:
     def __init__(self, api_key, access_token):
@@ -56,9 +58,9 @@ class LiveCandleTrader:
         
         # Candle data structures
         self.current_1min_candles = {}  # symbol -> current 1-minute candle
-        self.current_5min_candles = {}  # symbol -> current 5-minute candle
         self.completed_1min_candles = defaultdict(list)  # symbol -> list of 1-min candles
-        self.breakout_candles = {}  # symbol -> first 5-minute breakout candle
+        self.breakout_1min_candles = defaultdict(list)  # symbol -> list of 1-min candles for breakout (9:15-9:19)
+        self.breakout_candles = {}  # symbol -> consolidated breakout candle from 5 candles
         
         # Symbol mappings
         self.symbol_tokens = {}
@@ -66,9 +68,17 @@ class LiveCandleTrader:
         
         # Timing
         self.current_1min = None
-        self.current_5min = None
         self.breakout_candle_formed = False
         self.candle_lock = threading.Lock()
+        
+        # Pre-calculate expected breakout times
+        self.expected_breakout_times = [
+            datetime.now().replace(hour=9, minute=15, second=0, microsecond=0).time(),
+            datetime.now().replace(hour=9, minute=16, second=0, microsecond=0).time(),
+            datetime.now().replace(hour=9, minute=17, second=0, microsecond=0).time(),
+            datetime.now().replace(hour=9, minute=18, second=0, microsecond=0).time(),
+            datetime.now().replace(hour=9, minute=19, second=0, microsecond=0).time()
+        ]
         
         self.setup_callbacks()
     
@@ -82,8 +92,7 @@ class LiveCandleTrader:
         self.kws.on_noreconnect = self.on_noreconnect
     
     def initialize_symbols(self, symbols):
-        """Initialize symbol to token mapping and calculate quantities"""
-        logger.info(f"Initializing {len(symbols)} symbols...")
+        """Initialize symbol to token mapping"""
         
         instruments = self.kite.instruments("NSE")
         tokens = []
@@ -97,7 +106,6 @@ class LiveCandleTrader:
                     tokens.append(token)
                     self.symbol_tokens[symbol] = token
                     self.token_symbols[token] = symbol
-                    logger.info(f"Mapped {symbol} -> {token}")
                     break
             else:
                 logger.warning(f"Token not found for symbol: {symbol}")
@@ -116,18 +124,10 @@ class LiveCandleTrader:
             breakout_range = abs(candle['high'] - candle['low'])
             quantity = int(per_stock_risk / breakout_range) if breakout_range > 0 else 1
             self.quantity_map[symbol] = quantity
-            logger.info(f"{symbol} Range:{breakout_range:.2f} Qty:{quantity} Risk:{per_stock_risk:.2f}")
     
-    def initialize_candle(self, symbol, price, timestamp, candle_type='1min'):
-        """Initialize a new candle"""
-        if candle_type == '1min':
-            minute_timestamp = timestamp.replace(second=0, microsecond=0)
-            candles_dict = self.current_1min_candles
-        else:  # 5min
-            # Round to 5-minute boundary
-            minutes = (timestamp.minute // 5) * 5
-            minute_timestamp = timestamp.replace(minute=minutes, second=0, microsecond=0)
-            candles_dict = self.current_5min_candles
+    def initialize_candle(self, symbol, price, timestamp):
+        """Initialize a new 1-minute candle"""
+        minute_timestamp = timestamp.replace(second=0, microsecond=0)
         
         candle = {
             'symbol': symbol,
@@ -142,18 +142,15 @@ class LiveCandleTrader:
             'last_tick_time': timestamp
         }
         
-        candles_dict[symbol] = candle
-        logger.info(f"{symbol} - New {candle_type} candle started at {minute_timestamp.strftime('%H:%M:%S')} | O:{price:.2f}")
+        self.current_1min_candles[symbol] = candle
         return candle
     
-    def update_candle(self, symbol, price, volume, timestamp, candle_type='1min'):
-        """Update existing candle with new tick data"""
-        candles_dict = self.current_1min_candles if candle_type == '1min' else self.current_5min_candles
-        
-        if symbol not in candles_dict:
+    def update_candle(self, symbol, price, volume, timestamp):
+        """Update existing 1-minute candle with new tick data"""
+        if symbol not in self.current_1min_candles:
             return
         
-        candle = candles_dict[symbol]
+        candle = self.current_1min_candles[symbol]
         
         # Update OHLC
         if price > candle['high']:
@@ -173,57 +170,80 @@ class LiveCandleTrader:
             return
         
         candle = self.current_1min_candles[symbol]
+        candle_time = candle['timestamp'].time()
         
         # Add to completed candles
         self.completed_1min_candles[symbol].append(candle.copy())
-        
-        # Log completed candle
-        logger.info(f"{symbol} - 1min Candle COMPLETED {candle['timestamp'].strftime('%H:%M')} | "
-                   f"O:{candle['open']:.2f} H:{candle['high']:.2f} L:{candle['low']:.2f} C:{candle['close']:.2f} "
-                   f"V:{candle['volume']} Ticks:{candle['tick_count']}")
         
         # Log to CSV
         candle_logger.info(f"{candle['timestamp'].strftime('%Y-%m-%d')},{candle['timestamp'].strftime('%H:%M')},"
                           f"{symbol},1min,{candle['open']:.2f},{candle['high']:.2f},{candle['low']:.2f},{candle['close']:.2f},"
                           f"{candle['volume']},{candle['tick_count']}")
         
-        # Check for trading opportunity if breakout candle is available
-        if self.breakout_candle_formed and symbol in self.breakout_candles and symbol in self.quantity_map:
+        # Check if this is exactly one of the 5 breakout candles (9:15, 9:16, 9:17, 9:18, 9:19)
+        if candle_time in self.expected_breakout_times:
+            # Ensure we don't add duplicate candles for the same minute
+            existing_times = [c['timestamp'].time() for c in self.breakout_1min_candles[symbol]]
+            if candle_time not in existing_times:
+                self.breakout_1min_candles[symbol].append(candle.copy())
+                
+                # Log first breakout candle
+                if len(self.breakout_1min_candles[symbol]) == 1:
+                    logger.info(f"{symbol} - Breakout period started (9:15-9:19)")
+                
+                # If we have all 5 candles (9:15, 9:16, 9:17, 9:18, 9:19), form breakout candle
+                if len(self.breakout_1min_candles[symbol]) == 5:
+                    self.form_breakout_candle(symbol)
+        
+        # Check for trading opportunity if breakout candle is available and after trading start time
+        elif (self.breakout_candle_formed and symbol in self.breakout_candles and 
+              symbol in self.quantity_map and candle_time >= TRADING_START):
             self.check_breakout_entry(symbol, candle)
         
         # Remove from current candles
         del self.current_1min_candles[symbol]
     
-    def complete_5min_candle(self, symbol):
-        """Complete 5-minute candle"""
-        if symbol not in self.current_5min_candles:
+    def form_breakout_candle(self, symbol):
+        """Form breakout candle from 5 one-minute candles (9:15-9:19)"""
+        candles = self.breakout_1min_candles[symbol]
+        
+        if len(candles) != 5:
             return
         
-        candle = self.current_5min_candles[symbol]
+        # Validate that we have exactly the right 5 candles (9:15, 9:16, 9:17, 9:18, 9:19)
+        expected_minutes = [15, 16, 17, 18, 19]
+        actual_minutes = sorted([c['timestamp'].minute for c in candles])
         
-        # Log completed 5-minute candle
-        logger.info(f"{symbol} - 5min Candle COMPLETED {candle['timestamp'].strftime('%H:%M')} | "
-                   f"O:{candle['open']:.2f} H:{candle['high']:.2f} L:{candle['low']:.2f} C:{candle['close']:.2f} "
-                   f"V:{candle['volume']} Ticks:{candle['tick_count']}")
+        if actual_minutes != expected_minutes:
+            logger.error(f"{symbol} - Invalid breakout candles. Expected: {expected_minutes}, Got: {actual_minutes}")
+            return
         
-        # Log to CSV
-        candle_logger.info(f"{candle['timestamp'].strftime('%Y-%m-%d')},{candle['timestamp'].strftime('%H:%M')},"
-                          f"{symbol},5min,{candle['open']:.2f},{candle['high']:.2f},{candle['low']:.2f},{candle['close']:.2f},"
-                          f"{candle['volume']},{candle['tick_count']}")
+        # Create consolidated breakout candle from 5 candles
+        breakout_candle = {
+            'symbol': symbol,
+            'timestamp': candles[0]['timestamp'],  # Start time (9:15)
+            'open': candles[0]['open'],  # Open of first candle
+            'high': max(c['high'] for c in candles),  # Highest high
+            'low': min(c['low'] for c in candles),   # Lowest low
+            'close': candles[-1]['close'],  # Close of last candle
+            'volume': sum(c['volume'] for c in candles),  # Total volume
+            'tick_count': sum(c['tick_count'] for c in candles)  # Total ticks
+        }
         
-        # Check if this is the first 5-minute candle (9:15-9:20) for breakout reference
-        if candle['timestamp'].time() == BREAKOUT_START_TIME:
-            self.breakout_candles[symbol] = candle.copy()
-            logger.info(f"{symbol} - BREAKOUT CANDLE SET | H:{candle['high']:.2f} L:{candle['low']:.2f}")
-            
-            # Calculate quantities once all breakout candles are formed
-            if len(self.breakout_candles) == len(self.token_symbols):
-                self.calculate_quantities_from_breakout()
-                self.breakout_candle_formed = True
-                logger.info("All breakout candles formed. Trading logic activated.")
+        self.breakout_candles[symbol] = breakout_candle
+        logger.info(f"{symbol} - BREAKOUT CANDLE SET | H:{breakout_candle['high']:.2f} L:{breakout_candle['low']:.2f}")
         
-        # Remove from current candles
-        del self.current_5min_candles[symbol]
+        # Log consolidated breakout candle to CSV
+        candle_logger.info(f"{breakout_candle['timestamp'].strftime('%Y-%m-%d')},{breakout_candle['timestamp'].strftime('%H:%M')},"
+                          f"{symbol},breakout,{breakout_candle['open']:.2f},{breakout_candle['high']:.2f},"
+                          f"{breakout_candle['low']:.2f},{breakout_candle['close']:.2f},"
+                          f"{breakout_candle['volume']},{breakout_candle['tick_count']}")
+        
+        # Calculate quantities when all breakout candles ready
+        if len(self.breakout_candles) == len(self.token_symbols):
+            self.calculate_quantities_from_breakout()
+            self.breakout_candle_formed = True
+            logger.info("Breakout candles formed. Trading active.")
     
     def check_breakout_entry(self, symbol, completed_1min_candle):
         """Check if 1-minute candle shows breakout and take entry"""
@@ -242,7 +262,7 @@ class LiveCandleTrader:
             logger.info(f"{symbol} SKIP - Need:{deployed_capital:.0f} Available:{self.available_capital:.0f}")
             return
         
-        # Check for LONG breakout (candle high > breakout high)
+        # LONG breakout
         if candle_high > breakout_candle['high']:
             try:
                 order_id = self.kite.place_order(
@@ -257,10 +277,9 @@ class LiveCandleTrader:
                 )
                 
                 self.available_capital -= deployed_capital
-                logger.info(f"{symbol} BUY {order_id} @ {candle_close:.2f} Qty:{quantity} "
-                           f"Deployed:{deployed_capital:.0f} Remaining:{self.available_capital:.0f}")
+                logger.info(f"{symbol} BUY {order_id} @ {candle_close:.2f} Qty:{quantity}")
                 
-                # Place stop loss at breakout low
+                # Place SL at breakout low
                 stop_loss_price = breakout_candle['low']
                 sl_info = self.place_stop_loss_order(symbol, quantity, 'BUY', stop_loss_price)
                 
@@ -273,7 +292,7 @@ class LiveCandleTrader:
             except Exception as e:
                 logger.error(f"{symbol} BUY FAILED: {e}")
         
-        # Check for SHORT breakout (candle low < breakout low)
+        # SHORT breakout
         elif candle_low < breakout_candle['low']:
             try:
                 order_id = self.kite.place_order(
@@ -288,10 +307,9 @@ class LiveCandleTrader:
                 )
                 
                 self.available_capital -= deployed_capital
-                logger.info(f"{symbol} SELL {order_id} @ {candle_close:.2f} Qty:{quantity} "
-                           f"Deployed:{deployed_capital:.0f} Remaining:{self.available_capital:.0f}")
+                logger.info(f"{symbol} SELL {order_id} @ {candle_close:.2f} Qty:{quantity}")
                 
-                # Place stop loss at breakout high
+                # Place SL at breakout high
                 stop_loss_price = breakout_candle['high']
                 sl_info = self.place_stop_loss_order(symbol, quantity, 'SELL', stop_loss_price)
                 
@@ -323,7 +341,7 @@ class LiveCandleTrader:
                 validity=self.kite.VALIDITY_DAY
             )
             
-            logger.info(f"{symbol} STOP LOSS {sl_order_id} @ {stop_loss_price:.2f} for {position_type} position")
+            logger.info(f"{symbol} SL {sl_order_id} @ {stop_loss_price:.2f}")
             return {'stop_loss_order_id': sl_order_id, 'stop_loss_price': stop_loss_price}
             
         except Exception as e:
@@ -331,35 +349,19 @@ class LiveCandleTrader:
             return None
     
     def check_minute_changes(self, current_time):
-        """Check for both 1-minute and 5-minute changes"""
+        """Check for 1-minute changes"""
         current_1min = current_time.replace(second=0, microsecond=0)
-        current_5min = current_time.replace(minute=(current_time.minute // 5) * 5, second=0, microsecond=0)
         
         # Check 1-minute change
         if self.current_1min is None:
             self.current_1min = current_1min
         elif current_1min > self.current_1min:
-            logger.info(f"1-minute changed: {self.current_1min.strftime('%H:%M')} -> {current_1min.strftime('%H:%M')}")
-            
             # Complete all current 1-minute candles
             symbols_to_complete = list(self.current_1min_candles.keys())
             for symbol in symbols_to_complete:
                 self.complete_1min_candle(symbol)
             
             self.current_1min = current_1min
-        
-        # Check 5-minute change
-        if self.current_5min is None:
-            self.current_5min = current_5min
-        elif current_5min > self.current_5min:
-            logger.info(f"5-minute changed: {self.current_5min.strftime('%H:%M')} -> {current_5min.strftime('%H:%M')}")
-            
-            # Complete all current 5-minute candles
-            symbols_to_complete = list(self.current_5min_candles.keys())
-            for symbol in symbols_to_complete:
-                self.complete_5min_candle(symbol)
-            
-            self.current_5min = current_5min
     
     def on_ticks(self, ws, ticks):
         """Process incoming ticks"""
@@ -393,28 +395,18 @@ class LiveCandleTrader:
                 
                 # Update/initialize 1-minute candles
                 if symbol not in self.current_1min_candles:
-                    self.initialize_candle(symbol, price, current_time, '1min')
+                    self.initialize_candle(symbol, price, current_time)
                 else:
-                    self.update_candle(symbol, price, volume, current_time, '1min')
-                
-                # Update/initialize 5-minute candles (only if not formed breakout yet or still in first hour)
-                if current_time.time() <= datetime.strptime("10:00:00", "%H:%M:%S").time():
-                    if symbol not in self.current_5min_candles:
-                        self.initialize_candle(symbol, price, current_time, '5min')
-                    else:
-                        self.update_candle(symbol, price, volume, current_time, '5min')
+                    self.update_candle(symbol, price, volume, current_time)
     
     def on_connect(self, ws, response):
         """Called when websocket connects"""
-        logger.info("WebSocket Connected")
         if hasattr(self, 'tokens') and self.tokens:
             ws.subscribe(self.tokens)
             ws.set_mode(self.kws.MODE_FULL, self.tokens)
-            logger.info(f"Subscribed to {len(self.tokens)} tokens in FULL mode")
     
     def on_close(self, ws, code, reason):
         """Called when websocket closes"""
-        logger.info(f"WebSocket Closed: {code} - {reason}")
     
     def on_error(self, ws, code, reason):
         """Called when websocket encounters error"""
@@ -422,11 +414,9 @@ class LiveCandleTrader:
     
     def on_reconnect(self, ws, attempts_count):
         """Called when websocket reconnects"""
-        logger.info(f"WebSocket Reconnected successfully (attempt {attempts_count})")
         if hasattr(self, 'tokens') and self.tokens:
             ws.subscribe(self.tokens)
             ws.set_mode(self.kws.MODE_FULL, self.tokens)
-            logger.info(f"Re-subscribed to {len(self.tokens)} tokens after reconnection")
     
     def on_noreconnect(self, ws):
         """Called when websocket fails to reconnect"""
@@ -434,7 +424,7 @@ class LiveCandleTrader:
     
     def stop_trading_and_exit(self, ws=None):
         """Stop trading and close all positions"""
-        logger.info("Market closed, stopping...")
+        logger.info("Market closed, stopping.")
         self.trading_active = False
         self.close_all_positions()
         self.cancel_all_orders()
@@ -452,7 +442,6 @@ class LiveCandleTrader:
         if not self.positions_taken:
             return
         
-        logger.info(f"Closing {len(self.positions_taken)} positions...")
         
         for symbol, position in self.positions_taken.items():
             try:
@@ -460,7 +449,6 @@ class LiveCandleTrader:
                 if 'stop_loss_order_id' in position:
                     try:
                         self.kite.cancel_order(order_id=position['stop_loss_order_id'], variety=self.kite.VARIETY_REGULAR)
-                        logger.info(f"{symbol} CANCELLED STOP LOSS {position['stop_loss_order_id']}")
                     except Exception as e:
                         logger.error(f"{symbol} CANCEL STOP LOSS FAILED: {e}")
                 
@@ -479,7 +467,7 @@ class LiveCandleTrader:
                 )
                 
                 action = "SELL" if position['direction'] == 'BUY' else "BUY"
-                logger.info(f"{symbol} CLOSE {action} {order_id} Qty:{position['quantity']}")
+                logger.info(f"{symbol} CLOSE {action} {order_id}")
                 
             except Exception as e:
                 logger.error(f"{symbol} CLOSE FAILED: {e}")
@@ -493,15 +481,12 @@ class LiveCandleTrader:
             open_orders = [o for o in orders if o['status'] in ['OPEN', 'TRIGGER_PENDING']]
             
             if not open_orders:
-                logger.info("No open orders to cancel")
                 return
             
-            logger.info(f"Cancelling {len(open_orders)} open orders...")
             
             for order in open_orders:
                 try:
                     self.kite.cancel_order(order_id=order['order_id'], variety=order['variety'])
-                    logger.info(f"Cancelled {order['tradingsymbol']} {order['order_id']}")
                 except Exception as e:
                     logger.error(f"Cancel failed {order['order_id']}: {e}")
                     
@@ -517,11 +502,10 @@ class LiveCandleTrader:
             logger.error("No valid tokens found. Exiting.")
             return
         
-        logger.info(f"Starting live candle trader for {len(self.tokens)} symbols")
-        logger.info(f"Auto-reconnect enabled: {self.kws.autoreconnect} (interval: {self.kws.reconnect_interval}s, tries: {self.kws.reconnect_tries})")
-        logger.info(f"Initial Capital: {INITIAL_CAPITAL:,} | Risk: {TOTAL_RISK_PERCENTAGE*100}%")
+        logger.info(f"Starting trader: {len(self.tokens)} symbols | Capital: {INITIAL_CAPITAL:,} | Risk: {TOTAL_RISK_PERCENTAGE*100}%")
+        logger.info(f"Strategy: 9:10+ | Breakout: 9:15-9:19 | Trading: 9:20+")
         
-        # Write header to candle log
+        # Initialize candle log
         try:
             with open('trading_candles.log', 'r') as f:
                 if not f.read().strip():
@@ -533,7 +517,7 @@ class LiveCandleTrader:
             # Connect to websocket
             self.kws.connect()
         except KeyboardInterrupt:
-            logger.info("Stopping live candle trader...")
+            logger.info("Stopping trader...")
         except Exception as e:
             logger.error(f"Error in live candle trader: {e}")
         finally:

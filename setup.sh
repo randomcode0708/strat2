@@ -21,3 +21,5 @@ pip install -r requirements.txt
 # source .venv/bin/activate && nohup python3 kite_websocket.py --api_key dsn6a9hdvuon0zve --access_token MmlxhvDEtlgxobu4z2c1HXHBk9vwFMKn --symbols "IOLCP,MOBIKWIK,COHANCE,MOSCHIP,GMDCLTD,ASHOKLEY,JMFINANCIL,TATAMOTORS,M&M,BAJAJ-AUTO,EICHERMOT,EXIDEIND,TVSMOTOR,KAYNES,ABCAPITAL,MANAPPURAM,MARUTI,ESCORTS,ENRIN,NYKAA,POLYCAB,DIXON,BAJFINANCE,ONGC,INFY,TCS,TECHM,SBILIFE,GRSE,MAXHEALTH,PERSISTENT,FORCEMOT,PARADEEP" --mode ltp > /dev/null 2>&1 &
 
 # source .venv/bin/activate && nohup python3 candle_builder.py --api_key dsn6a9hdvuon0zve --access_token MmlxhvDEtlgxobu4z2c1HXHBk9vwFMKn --symbols "IOLCP,MOBIKWIK,COHANCE,MOSCHIP,GMDCLTD,ASHOKLEY,JMFINANCIL,TATAMOTORS,M&M,BAJAJ-AUTO,EICHERMOT,EXIDEIND,TVSMOTOR,KAYNES,ABCAPITAL,MANAPPURAM,MARUTI,ESCORTS,ENRIN,NYKAA,POLYCAB,DIXON,BAJFINANCE,ONGC,INFY,TCS,TECHM,SBILIFE,GRSE,MAXHEALTH,PERSISTENT,FORCEMOT,PARADEEP" > /dev/null 2>&1 &
+
+# source .venv/bin/activate && nohup python3 live_candle_trader.py --api_key dsn6a9hdvuon0zve --access_token MmlxhvDEtlgxobu4z2c1HXHBk9vwFMKn --symbols "TCS,INFY" > /dev/null 2>&1 &
