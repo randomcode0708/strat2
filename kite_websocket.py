@@ -135,6 +135,34 @@ def initialize_candle_data():
     candles_initialized = True
     logger.info(f"Candles initialized | Available Capital: {AVAILABLE_CAPITAL:.0f}")
 
+def place_stop_loss_order(symbol, quantity, direction, stop_loss_price):
+
+    global kite
+    
+    try:
+        sl_transaction_type = kite.TRANSACTION_TYPE_SELL if direction == 'BUY' else kite.TRANSACTION_TYPE_BUY
+        position_type = "LONG" if direction == 'BUY' else "SHORT"
+        
+        sl_order_id = kite.place_order(
+            variety=kite.VARIETY_REGULAR,
+            tradingsymbol=symbol,
+            exchange=kite.EXCHANGE_NSE,
+            transaction_type=sl_transaction_type,
+            quantity=quantity,
+            order_type=kite.ORDER_TYPE_SL,
+            price=stop_loss_price,
+            trigger_price=stop_loss_price,
+            product=kite.PRODUCT_MIS,
+            validity=kite.VALIDITY_DAY
+        )
+        
+        logger.info(f"{symbol} STOP LOSS {sl_order_id} @ {stop_loss_price:.2f} for {position_type} position")
+        return {'stop_loss_order_id': sl_order_id, 'stop_loss_price': stop_loss_price}
+        
+    except Exception as e:
+        logger.error(f"{symbol} STOP LOSS FAILED: {e}")
+        return None
+
 def initialize_token_mappings():
     global SYMBOLS, SYMBOL_TOKENS, TOKEN_TO_SYMBOL, SYMBOL_TO_TOKEN, AVAILABLE_CAPITAL, INITIAL_CAPITAL, kite
     
@@ -179,7 +207,17 @@ def lookfor_buy_sell(symbol, quantity, ltp):
                                       product=kite.PRODUCT_MIS, validity=kite.VALIDITY_DAY)
             AVAILABLE_CAPITAL -= deployed_capital
             logger.info(f"{symbol} BUY {order_id} @ {ltp:.2f} Qty:{quantity} Deployed:{deployed_capital:.0f} Remaining:{AVAILABLE_CAPITAL:.0f}")
-            POSITIONS_TAKEN[symbol] = {'direction': 'BUY', 'quantity': quantity, 'price': ltp}
+            
+            # Place stop loss at low of breakout candle for LONG position
+            stop_loss_price = candle['low']
+            sl_info = place_stop_loss_order(symbol, quantity, 'BUY', stop_loss_price)
+            
+            # Update position tracking
+            position_data = {'direction': 'BUY', 'quantity': quantity, 'price': ltp}
+            if sl_info:
+                position_data.update(sl_info)
+            POSITIONS_TAKEN[symbol] = position_data
+                
         except Exception as e:
             logger.error(f"{symbol} BUY FAILED: {e}")
             
@@ -191,7 +229,17 @@ def lookfor_buy_sell(symbol, quantity, ltp):
                                       product=kite.PRODUCT_MIS, validity=kite.VALIDITY_DAY)
             AVAILABLE_CAPITAL -= deployed_capital
             logger.info(f"{symbol} SELL {order_id} @ {ltp:.2f} Qty:{quantity} Deployed:{deployed_capital:.0f} Remaining:{AVAILABLE_CAPITAL:.0f}")
-            POSITIONS_TAKEN[symbol] = {'direction': 'SELL', 'quantity': quantity, 'price': ltp}
+            
+            # Place stop loss at high of breakout candle for SHORT position
+            stop_loss_price = candle['high']
+            sl_info = place_stop_loss_order(symbol, quantity, 'SELL', stop_loss_price)
+            
+            # Update position tracking
+            position_data = {'direction': 'SELL', 'quantity': quantity, 'price': ltp}
+            if sl_info:
+                position_data.update(sl_info)
+            POSITIONS_TAKEN[symbol] = position_data
+                
         except Exception as e:
             logger.error(f"{symbol} SELL FAILED: {e}")
 
@@ -220,6 +268,15 @@ def closeAllPositions():
     
     for symbol, position in POSITIONS_TAKEN.items():
         try:
+            # Cancel stop loss order if it exists
+            if 'stop_loss_order_id' in position:
+                try:
+                    kite.cancel_order(order_id=position['stop_loss_order_id'], variety=kite.VARIETY_REGULAR)
+                    logger.info(f"{symbol} CANCELLED STOP LOSS {position['stop_loss_order_id']}")
+                except Exception as e:
+                    logger.error(f"{symbol} CANCEL STOP LOSS FAILED: {e}")
+            
+            # Close the position
             opposite_direction = kite.TRANSACTION_TYPE_SELL if position['direction'] == 'BUY' else kite.TRANSACTION_TYPE_BUY
             
             order_id = kite.place_order(variety=kite.VARIETY_REGULAR, tradingsymbol=symbol,
