@@ -23,7 +23,7 @@ TOTAL_RISK_PERCENTAGE = 0.02
 QUANTITY_MAP = {}
 POSITIONS_TAKEN = {}
 
-MARKET_START = datetime.strptime("09:20:00", "%H:%M:%S").time()
+MARKET_START = datetime.strptime("09:21:00", "%H:%M:%S").time()
 MARKET_END = datetime.strptime("15:15:00", "%H:%M:%S").time()
 STRATEGY_END = datetime.strptime("15:00:00", "%H:%M:%S").time()
 #FROM_TIME_BREAKOUT = datetime(2025, 9, 5, 9, 15, 0)
@@ -117,6 +117,7 @@ def initialize_candle_data():
     
     for symbol in SYMBOLS:
         candles = kite.historical_data(SYMBOL_TO_TOKEN[symbol], FROM_TIME_BREAKOUT, datetime.now(), "5minute")
+        logger.info(f"{symbol} | Full JSON Response: {candles}")
         first_candle = candles[0]
         CANDLE_MAP[symbol] = [first_candle]
         logger.info(f"{symbol} | O:{first_candle['open']:.2f} H:{first_candle['high']:.2f} "
