@@ -129,7 +129,7 @@ def initialize_candle_data():
     for symbol in SYMBOLS:
         candle = CANDLE_MAP[symbol][0]
         breakout_range = abs(candle['high'] - candle['low'])
-        quantity = int(per_stock_risk / breakout_range)
+        quantity = max(1, int(per_stock_risk / breakout_range))
         QUANTITY_MAP[symbol] = quantity
         logger.info(f"{symbol} Range:{breakout_range:.2f} Qty:{quantity} perStockRisk:{per_stock_risk:.2f}")
     
@@ -150,8 +150,7 @@ def place_stop_loss_order(symbol, quantity, direction, stop_loss_price):
             exchange=kite.EXCHANGE_NSE,
             transaction_type=sl_transaction_type,
             quantity=quantity,
-            order_type=kite.ORDER_TYPE_SL,
-            price=stop_loss_price,
+            order_type=kite.ORDER_TYPE_SLM,
             trigger_price=stop_loss_price,
             product=kite.PRODUCT_MIS,
             validity=kite.VALIDITY_DAY
