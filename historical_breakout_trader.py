@@ -57,9 +57,10 @@ class HistoricalBreakoutTrader:
                 
                 # Check if market is open
                 if current_time_only < MARKET_START or current_time_only > MARKET_END:
-                    if current_time_only.hour == 9 and current_time_only.minute == 20:  # Log once before market opens
-                        logger.info(f"Waiting for market to open | Current Time: {current_time_only}")
-                    time.sleep(POLLING_INTERVAL)
+                    # Log once per minute when waiting for market to open (to avoid spam)
+                    if current_time.second < 30:  # Log only in first 30 seconds of each minute
+                        logger.info(f"Market not open | Current Time: {current_time_only}")
+                    self.sleep_until_next_minute(current_time)
                     continue
                 
                 # Initialize candle data only after market has started
@@ -76,8 +77,8 @@ class HistoricalBreakoutTrader:
                 # Check for breakouts using completed 1-minute candles
                 self.check_breakouts_from_historical_data(current_time)
                 
-                # Sleep for polling interval
-                time.sleep(POLLING_INTERVAL)
+                # Sleep until next minute boundary (more efficient than fixed interval)
+                self.sleep_until_next_minute(current_time)
                 
             except KeyboardInterrupt:
                 logger.info("Keyboard interrupt received, stopping...")
@@ -85,7 +86,22 @@ class HistoricalBreakoutTrader:
                 break
             except Exception as e:
                 logger.error(f"Error in trading loop: {e}")
-                time.sleep(POLLING_INTERVAL)
+                # Sleep for 30 seconds on error to avoid rapid error loops
+                time.sleep(30)
+    
+    def sleep_until_next_minute(self, current_time):
+        """Sleep until the next minute boundary for efficient polling"""
+        # Calculate seconds until next minute
+        seconds_until_next_minute = 60 - current_time.second - (current_time.microsecond / 1000000.0)
+        
+        # Add a small buffer (1 second) to ensure the minute has fully passed
+        sleep_duration = seconds_until_next_minute + 1
+        
+        # Minimum sleep of 5 seconds to avoid too frequent polling
+        sleep_duration = max(5, sleep_duration)
+        
+        logger.debug(f"Sleeping {sleep_duration:.1f}s until next minute (current: {current_time.strftime('%H:%M:%S')})")
+        time.sleep(sleep_duration)
     
     def check_breakouts_from_historical_data(self, current_time):
         """Check for breakouts using 1-minute historical data"""
@@ -313,63 +329,97 @@ def stop_trading_and_exit():
     threading.Thread(target=delayed_exit, daemon=True).start()
 
 def closeAllPositions():
-    """Close all open positions"""
-    global POSITIONS_TAKEN, kite
-    
-    if not POSITIONS_TAKEN:
-        return
-    
-    logger.info(f"Closing {len(POSITIONS_TAKEN)} positions...")
-    
-    for symbol, position in POSITIONS_TAKEN.items():
-        try:
-            # Cancel stop loss order if it exists
-            if 'stop_loss_order_id' in position:
-                try:
-                    kite.cancel_order(order_id=position['stop_loss_order_id'], variety=kite.VARIETY_REGULAR)
-                    logger.info(f"{symbol} CANCELLED STOP LOSS {position['stop_loss_order_id']}")
-                except Exception as e:
-                    logger.error(f"{symbol} CANCEL STOP LOSS FAILED: {e}")
-            
-            # Close the position
-            opposite_direction = kite.TRANSACTION_TYPE_SELL if position['direction'] == 'BUY' else kite.TRANSACTION_TYPE_BUY
-            
-            order_id = kite.place_order(variety=kite.VARIETY_REGULAR, tradingsymbol=symbol,
-                                      exchange=kite.EXCHANGE_NSE, transaction_type=opposite_direction,
-                                      quantity=position['quantity'], order_type=kite.ORDER_TYPE_MARKET,
-                                      product=kite.PRODUCT_MIS, validity=kite.VALIDITY_DAY)
-            
-            action = "SELL" if position['direction'] == 'BUY' else "BUY"
-            logger.info(f"{symbol} CLOSE {action} {order_id} Qty:{position['quantity']}")
-            
-        except Exception as e:
-            logger.error(f"{symbol} CLOSE FAILED: {e}")
-    
-    POSITIONS_TAKEN.clear()
-
-def cancelAllOrders():
-    """Cancel all open orders"""
+    """Close all open positions based on actual Kite API positions"""
     global kite
     
     try:
+        # Get actual positions from Kite API
+        positions = kite.positions()
+        
+        # Filter for MIS (intraday) positions that are not zero
+        open_positions = []
+        for position in positions['net']:
+            if (position['product'] == 'MIS' and 
+                position['quantity'] != 0 and 
+                position['tradingsymbol'] in [s for s in SYMBOLS]):  # Only our trading symbols
+                open_positions.append(position)
+        
+        if not open_positions:
+            logger.info("No open positions to close")
+            return
+        
+        logger.info(f"Closing {len(open_positions)} positions based on Kite API data...")
+        
+        for position in open_positions:
+            try:
+                symbol = position['tradingsymbol']
+                quantity = abs(position['quantity'])  # Use absolute value
+                
+                # Determine transaction type to close the position
+                if position['quantity'] > 0:  # Long position - need to sell
+                    transaction_type = kite.TRANSACTION_TYPE_SELL
+                    action = "SELL"
+                else:  # Short position - need to buy
+                    transaction_type = kite.TRANSACTION_TYPE_BUY
+                    action = "BUY"
+                
+                # Place market order to close position
+                order_id = kite.place_order(
+                    variety=kite.VARIETY_REGULAR,
+                    tradingsymbol=symbol,
+                    exchange=kite.EXCHANGE_NSE,
+                    transaction_type=transaction_type,
+                    quantity=quantity,
+                    order_type=kite.ORDER_TYPE_MARKET,
+                    product=kite.PRODUCT_MIS,
+                    validity=kite.VALIDITY_DAY
+                )
+                
+                logger.info(f"{symbol} CLOSE {action} {order_id} Qty:{quantity} (API Position: {position['quantity']})")
+                
+            except Exception as e:
+                logger.error(f"{symbol} CLOSE FAILED: {e}")
+        
+        # Clear our local tracking since we're closing everything
+        POSITIONS_TAKEN.clear()
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch positions from API: {e}")
+
+def cancelAllOrders():
+    """Cancel all open orders based on actual Kite API orders"""
+    global kite
+    
+    try:
+        # Get actual orders from Kite API
         orders = kite.orders()
-        open_orders = [o for o in orders if o['status'] in ['OPEN', 'TRIGGER_PENDING']]
+        
+        # Filter for open orders (including our symbols and any other open orders)
+        open_orders = []
+        for order in orders:
+            if order['status'] in ['OPEN', 'TRIGGER_PENDING', 'MODIFY_PENDING']:
+                # Filter for MIS product and our trading symbols, or any stop loss orders
+                if (order['product'] == 'MIS' and 
+                    (order['tradingsymbol'] in SYMBOLS or 
+                     order['order_type'] in ['SL', 'SLM'])):  # Include stop loss orders
+                    open_orders.append(order)
         
         if not open_orders:
             logger.info("No open orders to cancel")
             return
         
-        logger.debug(f"Cancelling {len(open_orders)} open orders...")
+        logger.info(f"Cancelling {len(open_orders)} open orders based on Kite API data...")
         
         for order in open_orders:
             try:
                 kite.cancel_order(order_id=order['order_id'], variety=order['variety'])
-                logger.info(f"Cancelled {order['tradingsymbol']} {order['order_id']}")
+                order_type_desc = f"{order['order_type']}" + (f" (SL@{order['trigger_price']})" if order['order_type'] in ['SL', 'SLM'] else "")
+                logger.info(f"Cancelled {order['tradingsymbol']} {order['order_id']} {order_type_desc}")
             except Exception as e:
-                logger.error(f"Cancel failed {order['order_id']}: {e}")
+                logger.error(f"Cancel failed {order['tradingsymbol']} {order['order_id']}: {e}")
                 
     except Exception as e:
-        logger.error(f"Failed to fetch orders: {e}")
+        logger.error(f"Failed to fetch orders from API: {e}")
 
 def main():
     global SYMBOLS
