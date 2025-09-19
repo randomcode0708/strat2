@@ -57,9 +57,7 @@ class HistoricalBreakoutTrader:
                 
                 # Check if market is open
                 if current_time_only < MARKET_START or current_time_only > MARKET_END:
-                    # Log once per minute when waiting for market to open (to avoid spam)
-                    if current_time.second < 30:  # Log only in first 30 seconds of each minute
-                        logger.info(f"Market not open | Current Time: {current_time_only}")
+                    logger.info(f"Market not open | Current Time: {current_time_only}")
                     self.sleep_until_next_minute(current_time)
                     continue
                 
@@ -177,17 +175,17 @@ class HistoricalBreakoutTrader:
         # Check for upward breakout (price breaks above breakout candle high)
         if current_price > breakout_candle['high']:
             try:
-                order_id = kite.place_order(
-                    variety=kite.VARIETY_REGULAR,
-                    tradingsymbol=symbol,
-                    exchange=kite.EXCHANGE_NSE,
-                    transaction_type=kite.TRANSACTION_TYPE_BUY,
-                    quantity=quantity,
-                    order_type=kite.ORDER_TYPE_MARKET,
-                    product=kite.PRODUCT_MIS,
-                    validity=kite.VALIDITY_DAY
-                )
-                
+                # order_id = kite.place_order(
+                #     variety=kite.VARIETY_REGULAR,
+                #     tradingsymbol=symbol,
+                #     exchange=kite.EXCHANGE_NSE,
+                #     transaction_type=kite.TRANSACTION_TYPE_BUY,
+                #     quantity=quantity,
+                #     order_type=kite.ORDER_TYPE_MARKET,
+                #     product=kite.PRODUCT_MIS,
+                #     validity=kite.VALIDITY_DAY
+                # )
+                order_id = 'N/A'
                 AVAILABLE_CAPITAL -= deployed_capital
                 logger.info(f"{symbol} BUY {order_id} @ {current_price:.2f} [{candle_time}] Qty:{quantity} "
                           f"Deployed:{deployed_capital:.0f} Remaining:{AVAILABLE_CAPITAL:.0f}")
@@ -208,16 +206,16 @@ class HistoricalBreakoutTrader:
         # Check for downward breakout (price breaks below breakout candle low)
         elif current_price < breakout_candle['low']:
             try:
-                order_id = kite.place_order(
-                    variety=kite.VARIETY_REGULAR,
-                    tradingsymbol=symbol,
-                    exchange=kite.EXCHANGE_NSE,
-                    transaction_type=kite.TRANSACTION_TYPE_SELL,
-                    quantity=quantity,
-                    order_type=kite.ORDER_TYPE_MARKET,
-                    product=kite.PRODUCT_MIS,
-                    validity=kite.VALIDITY_DAY
-                )
+                # order_id = kite.place_order(
+                #     variety=kite.VARIETY_REGULAR,
+                #     tradingsymbol=symbol,
+                #     exchange=kite.EXCHANGE_NSE,
+                #     transaction_type=kite.TRANSACTION_TYPE_SELL,
+                #     quantity=quantity,
+                #     order_type=kite.ORDER_TYPE_MARKET,
+                #     product=kite.PRODUCT_MIS,
+                #     validity=kite.VALIDITY_DAY
+                # )
                 order_id = 'N/A'
                 
                 AVAILABLE_CAPITAL -= deployed_capital
@@ -272,17 +270,17 @@ def place_stop_loss_order(symbol, quantity, direction, stop_loss_price):
         sl_transaction_type = kite.TRANSACTION_TYPE_SELL if direction == 'BUY' else kite.TRANSACTION_TYPE_BUY
         position_type = "LONG" if direction == 'BUY' else "SHORT"
         
-        sl_order_id = kite.place_order(
-            variety=kite.VARIETY_REGULAR,
-            tradingsymbol=symbol,
-            exchange=kite.EXCHANGE_NSE,
-            transaction_type=sl_transaction_type,
-            quantity=quantity,
-            order_type=kite.ORDER_TYPE_SLM,
-            trigger_price=stop_loss_price,
-            product=kite.PRODUCT_MIS,
-            validity=kite.VALIDITY_DAY
-        )
+        # sl_order_id = kite.place_order(
+        #     variety=kite.VARIETY_REGULAR,
+        #     tradingsymbol=symbol,
+        #     exchange=kite.EXCHANGE_NSE,
+        #     transaction_type=sl_transaction_type,
+        #     quantity=quantity,
+        #     order_type=kite.ORDER_TYPE_SLM,
+        #     trigger_price=stop_loss_price,
+        #     product=kite.PRODUCT_MIS,
+        #     validity=kite.VALIDITY_DAY
+        # )
         sl_order_id = 'N/A'
         logger.info(f"{symbol} STOP LOSS {sl_order_id} @ {stop_loss_price:.2f} for {position_type} position")
         return {'stop_loss_order_id': sl_order_id, 'stop_loss_price': stop_loss_price}
@@ -364,16 +362,16 @@ def closeAllPositions():
                     action = "BUY"
                 
                 # Place market order to close position
-                order_id = kite.place_order(
-                    variety=kite.VARIETY_REGULAR,
-                    tradingsymbol=symbol,
-                    exchange=kite.EXCHANGE_NSE,
-                    transaction_type=transaction_type,
-                    quantity=quantity,
-                    order_type=kite.ORDER_TYPE_MARKET,
-                    product=kite.PRODUCT_MIS,
-                    validity=kite.VALIDITY_DAY
-                )
+                # order_id = kite.place_order(
+                #     variety=kite.VARIETY_REGULAR,
+                #     tradingsymbol=symbol,
+                #     exchange=kite.EXCHANGE_NSE,
+                #     transaction_type=transaction_type,
+                #     quantity=quantity,
+                #     order_type=kite.ORDER_TYPE_MARKET,
+                #     product=kite.PRODUCT_MIS,
+                #     validity=kite.VALIDITY_DAY
+                # )
                 
                 logger.info(f"{symbol} CLOSE {action} {order_id} Qty:{quantity} (API Position: {position['quantity']})")
                 
@@ -412,7 +410,7 @@ def cancelAllOrders():
         
         for order in open_orders:
             try:
-                kite.cancel_order(order_id=order['order_id'], variety=order['variety'])
+                # kite.cancel_order(order_id=order['order_id'], variety=order['variety'])
                 order_type_desc = f"{order['order_type']}" + (f" (SL@{order['trigger_price']})" if order['order_type'] in ['SL', 'SLM'] else "")
                 logger.info(f"Cancelled {order['tradingsymbol']} {order['order_id']} {order_type_desc}")
             except Exception as e:
