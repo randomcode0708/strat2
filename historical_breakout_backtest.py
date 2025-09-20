@@ -18,6 +18,7 @@ SYMBOL_TOKENS = []
 TOKEN_TO_SYMBOL = {}
 SYMBOL_TO_TOKEN = {}
 CANDLE_MAP = {}
+HISTORICAL_DATA_CACHE = {}  # Cache all historical data per symbol
 candles_initialized = False
 INITIAL_CAPITAL = 360000
 AVAILABLE_CAPITAL = INITIAL_CAPITAL
@@ -29,49 +30,87 @@ TRADES_TAKEN = []  # Store all trades for final output
 MARKET_START = datetime.strptime("09:21:00", "%H:%M:%S").time()
 MARKET_END = datetime.strptime("15:15:00", "%H:%M:%S").time()
 STRATEGY_END = datetime.strptime("15:00:00", "%H:%M:%S").time()
-FROM_TIME_BREAKOUT = datetime.now().replace(hour=9, minute=15, second=0, microsecond=0)
+FROM_TIME_BREAKOUT = None  # Will be set based on command line date parameter
 
 TRADING_ACTIVE = True
 POLLING_INTERVAL = 30  # 30 seconds
 kite = None
 
 class HistoricalBreakoutTrader:
-    def __init__(self, api_key, access_token):
+    def __init__(self, api_key, access_token, trading_date=None):
         self.api_key = api_key
         self.access_token = access_token
         self.kite = KiteConnect(api_key=api_key)
         self.kite.set_access_token(access_token)
         self.last_checked_minute = None
+        self.trading_date = trading_date or datetime.now().date()
+        self.simulated_time = None  # For backtesting time simulation
         
     def start_trading(self):
-        global TRADING_ACTIVE, kite, candles_initialized
+        """Start the trading loop with 30-second polling"""
+        global TRADING_ACTIVE, kite, candles_initialized, FROM_TIME_BREAKOUT
         kite = self.kite
         
-        logger.info("Starting historical breakout trading...")
+        # Set the FROM_TIME_BREAKOUT based on trading date
+        FROM_TIME_BREAKOUT = datetime.combine(self.trading_date, datetime.strptime("09:15:00", "%H:%M:%S").time())
+        
+        logger.info(f"Starting historical breakout trading for date: {self.trading_date}")
+        logger.info(f"Breakout time set to: {FROM_TIME_BREAKOUT}")
+        
+        # Initialize token mappings only (candle data will be initialized after market starts)
         initialize_token_mappings()
+        
+        # Fetch all historical data once (works for both backtesting and live trading)
+        logger.info("Fetching all historical data once...")
+        self.fetch_all_historical_data()
+        
+        # Initialize simulated time for backtesting
+        if self.trading_date != datetime.now().date():
+            self.simulated_time = datetime.combine(self.trading_date, datetime.strptime("09:21:00", "%H:%M:%S").time())
+            logger.info(f"Backtesting mode: Starting simulation at {self.simulated_time}")
         
         while TRADING_ACTIVE:
             try:
-                current_time = datetime.now()
+                # Use simulated time for backtesting, or current datetime for live trading
+                if self.trading_date != datetime.now().date():
+                    # Backtesting mode - use simulated time
+                    current_time = self.simulated_time
+                    logger.debug(f"Backtesting: Using simulated time {current_time}")
+                else:
+                    # Live trading mode
+                    current_time = datetime.now()
+                    logger.debug(f"Live trading: Using current time {current_time}")
                 current_time_only = current_time.time()
                 
-                if current_time_only < MARKET_START or current_time_only > MARKET_END:
-                    logger.info(f"Market not open | Current Time: {current_time_only}")
-                    self.sleep_until_next_minute(current_time)
-                    continue
-                
+                # Initialize candle data only after market has started
                 if not candles_initialized:
                     logger.info(f"Market started, initializing candle data | Current Time: {current_time_only}")
-                    initialize_candle_data()
+                    initialize_candle_data(self.trading_date)
                 
+                # Check if strategy should end
                 if current_time_only >= STRATEGY_END:
                     logger.info(f"Strategy ended | Current Time: {current_time_only}")
                     stop_trading_and_exit()
                     break
                 
-                self.check_breakouts_from_historical_data(current_time)
+                # Check if all cached data has been processed (for backtesting)
+                if self.trading_date != datetime.now().date() and self.is_cached_data_exhausted(current_time):
+                    logger.info("All cached candle data has been processed. Ending trading session.")
+                    stop_trading_and_exit()
+                    break
                 
-                self.sleep_until_next_minute(current_time)
+                # Check for breakouts using cached data
+                self.check_breakouts_from_cached_data(current_time, self.trading_date)
+                if self.trading_date != datetime.now().date():
+                    # Backtesting mode - advance simulated time by 1 minute
+                    old_time = self.simulated_time
+                    self.simulated_time += timedelta(minutes=1)
+                    logger.info(f"Backtesting: Advanced time from {old_time.strftime('%H:%M:%S')} to {self.simulated_time.strftime('%H:%M:%S')}")
+                    # Add a small delay to make the progression visible
+                    time.sleep(0.1)
+                else:
+                    # Live trading mode - sleep until next minute boundary
+                    self.sleep_until_next_minute(current_time)
                 
             except KeyboardInterrupt:
                 logger.info("Keyboard interrupt received, stopping...")
@@ -84,19 +123,97 @@ class HistoricalBreakoutTrader:
     
     def sleep_until_next_minute(self, current_time):
         """Sleep until the next minute boundary for efficient polling"""
+        # Calculate seconds until next minute
         seconds_until_next_minute = 60 - current_time.second - (current_time.microsecond / 1000000.0)
         
+        # Add a small buffer (1 second) to ensure the minute has fully passed
         sleep_duration = seconds_until_next_minute + 1
         
+        # Minimum sleep of 5 seconds to avoid too frequent polling
         sleep_duration = max(5, sleep_duration)
         
         logger.debug(f"Sleeping {sleep_duration:.1f}s until next minute (current: {current_time.strftime('%H:%M:%S')})")
         time.sleep(sleep_duration)
     
-    def check_breakouts_from_historical_data(self, current_time):
-        global CANDLE_MAP, QUANTITY_MAP, POSITIONS_TAKEN
+    def fetch_all_historical_data(self):
+        """Fetch all historical data for the trading day once and cache it"""
+        global HISTORICAL_DATA_CACHE, SYMBOL_TO_TOKEN
+        
+        # Define the time range
+        start_time = datetime.combine(self.trading_date, datetime.strptime("09:00:00", "%H:%M:%S").time())
+        
+        if self.trading_date != datetime.now().date():
+            # Backtesting mode - get full day data
+            end_time = datetime.combine(self.trading_date, datetime.strptime("15:30:00", "%H:%M:%S").time())
+            mode = "Backtesting"
+        else:
+            # Live trading mode - get data up to current time
+            end_time = datetime.now()
+            mode = "Live trading"
+        
+        logger.info(f"{mode} mode: Fetching historical data from {start_time} to {end_time}")
+        
+        for symbol in SYMBOLS:
+            try:
+                token = SYMBOL_TO_TOKEN[symbol]
+                historical_data = self.kite.historical_data(
+                    instrument_token=token,
+                    from_date=start_time,
+                    to_date=end_time,
+                    interval="minute"
+                )
+                
+                if historical_data:
+                    HISTORICAL_DATA_CACHE[symbol] = historical_data
+                    logger.info(f"{symbol}: Cached {len(historical_data)} minute candles")
+                    #logger.info(f"{symbol}: Historical data: {historical_data}")
+                else:
+                    logger.warning(f"{symbol}: No historical data found for {self.trading_date}")
+                    HISTORICAL_DATA_CACHE[symbol] = []
+                    
+            except Exception as e:
+                logger.error(f"Error fetching historical data for {symbol}: {e}")
+                HISTORICAL_DATA_CACHE[symbol] = []
+        
+        logger.info(f"Historical data caching completed for {len(HISTORICAL_DATA_CACHE)} symbols")
+    
+    def is_cached_data_exhausted(self, current_time):
+        """Check if all cached candles have been processed"""
+        global HISTORICAL_DATA_CACHE
+        
+        if not HISTORICAL_DATA_CACHE:
+            logger.debug("No cached data available - exhausted")
+            return True
+        
+        # Get the previous completed minute (same logic as in check_breakouts_from_cached_data)
+        previous_minute = current_time.replace(second=0, microsecond=0) - timedelta(minutes=1)
+        logger.debug(f"Checking if data exhausted for previous_minute: {previous_minute}")
+        
+        # Check if any symbol has data beyond the previous minute
+        for symbol in SYMBOLS:
+            cached_data = HISTORICAL_DATA_CACHE.get(symbol, [])
+            if not cached_data:
+                continue
+                
+            # Find if there's any candle at or after the previous minute
+            for candle in cached_data:
+                candle_time = candle['date'].replace(tzinfo=None)
+                candle_minute = candle_time.replace(second=0, microsecond=0)
+                if candle_minute >= previous_minute:
+                    logger.debug(f"Found data for {symbol} at {candle_minute} >= {previous_minute} - not exhausted")
+                    return False  # Still have data to process
+        
+        logger.debug("All cached data has been processed - exhausted")
+        return True  # No more data available
+    
+    def check_breakouts_from_cached_data(self, current_time, trading_date):
+        """Check for breakouts using cached historical data"""
+        global CANDLE_MAP, QUANTITY_MAP, POSITIONS_TAKEN, HISTORICAL_DATA_CACHE
+        
+        # Get the previous completed minute (not the current forming minute)
         previous_minute = current_time.replace(second=0, microsecond=0) - timedelta(minutes=1)
         
+        # Skip if we already checked this minute
         if self.last_checked_minute == previous_minute:
             return
         self.last_checked_minute = previous_minute
@@ -106,23 +223,16 @@ class HistoricalBreakoutTrader:
                 continue
                 
             try:
-                to_time = current_time
-                from_time = current_time - timedelta(minutes=5)
-                
-                token = SYMBOL_TO_TOKEN[symbol]
-                historical_data = kite.historical_data(
-                    instrument_token=token,
-                    from_date=from_time,
-                    to_date=to_time,
-                    interval="minute"
-                )
-                logger.info(f"{symbol} - Historical data: {historical_data}")
-                if not historical_data:
-                    logger.error(f"{symbol} - No historical data found")
+                # Get cached historical data for this symbol
+                cached_data = HISTORICAL_DATA_CACHE.get(symbol, [])
+                if not cached_data:
+                    logger.error(f"{symbol} - No cached historical data found")
                     continue
                 
+                # Find the candle for the previous completed minute
                 target_candle = None
-                for candle in reversed(historical_data):
+                for candle in cached_data:
+                    # Make both timestamps timezone-naive and compare only hour:minute
                     candle_time = candle['date'].replace(tzinfo=None)
                     candle_minute = candle_time.replace(second=0, microsecond=0)
                     if candle_minute == previous_minute:
@@ -131,24 +241,25 @@ class HistoricalBreakoutTrader:
                         break
                 
                 if not target_candle:
-                    logger.error(f"{symbol} - No candle found for {previous_minute.strftime('%H:%M')}")
-                    logger.error(f"{symbol} - Available candle times: {[c['date'].replace(tzinfo=None).strftime('%H:%M') for c in historical_data]}")
+                    logger.debug(f"{symbol} - No candle found for {previous_minute.strftime('%H:%M')} in cached data")
                     continue
                 
+                # Check for breakout using the completed 1-minute candle
                 quantity = QUANTITY_MAP[symbol]
-                self.check_breakout_for_symbol(symbol, target_candle, quantity)
+                self.check_breakout_for_symbol(symbol, target_candle, quantity, current_time)
                 
             except Exception as e:
-                logger.error(f"Error checking {symbol}: {e}")
+                logger.error(f"Error checking {symbol} from cached data: {e}")
     
-    def check_breakout_for_symbol(self, symbol, current_candle, quantity):
+    def check_breakout_for_symbol(self, symbol, current_candle, quantity, trading_time):
+        """Check if current candle breaks out of the initial breakout range"""
         global CANDLE_MAP, POSITIONS_TAKEN, AVAILABLE_CAPITAL
         
         if symbol in POSITIONS_TAKEN:
             return
         
-        breakout_candle = CANDLE_MAP[symbol][0]
-        current_price = current_candle['close']
+        breakout_candle = CANDLE_MAP[symbol][0]  # Initial 5-minute breakout candle
+        current_price = current_candle['close']  # Use close price of completed 1-minute candle
         deployed_capital = quantity * current_price
         
         if deployed_capital > AVAILABLE_CAPITAL:
@@ -157,6 +268,7 @@ class HistoricalBreakoutTrader:
         
         candle_time = current_candle['date'].strftime('%H:%M')
         
+        # Check for upward breakout (price breaks above breakout candle high)
         if current_price > breakout_candle['high']:
             try:
                 # order_id = kite.place_order(
@@ -174,11 +286,13 @@ class HistoricalBreakoutTrader:
                 logger.info(f"{symbol} BUY {order_id} @ {current_price:.2f} [{candle_time}] Qty:{quantity} "
                           f"Deployed:{deployed_capital:.0f} Remaining:{AVAILABLE_CAPITAL:.0f}")
                 
+                # Place stop loss at low of breakout candle for LONG position
                 stop_loss_price = breakout_candle['low']
                 sl_info = place_stop_loss_order(symbol, quantity, 'BUY', stop_loss_price)
                 
+                # Record the trade
                 trade_record = {
-                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'timestamp': trading_time.strftime('%Y-%m-%d %H:%M:%S'),
                     'symbol': symbol,
                     'action': 'BUY',
                     'quantity': quantity,
@@ -192,6 +306,7 @@ class HistoricalBreakoutTrader:
                 }
                 TRADES_TAKEN.append(trade_record)
                 
+                # Update position tracking
                 position_data = {'direction': 'BUY', 'quantity': quantity, 'price': current_price}
                 if sl_info:
                     position_data.update(sl_info)
@@ -200,6 +315,7 @@ class HistoricalBreakoutTrader:
             except Exception as e:
                 logger.error(f"{symbol} BUY FAILED: {e}")
         
+        # Check for downward breakout (price breaks below breakout candle low)
         elif current_price < breakout_candle['low']:
             try:
                 # order_id = kite.place_order(
@@ -218,11 +334,13 @@ class HistoricalBreakoutTrader:
                 logger.info(f"{symbol} SELL {order_id} @ {current_price:.2f} [{candle_time}] Qty:{quantity} "
                           f"Deployed:{deployed_capital:.0f} Remaining:{AVAILABLE_CAPITAL:.0f}")
                 
+                # Place stop loss at high of breakout candle for SHORT position
                 stop_loss_price = breakout_candle['high']
                 sl_info = place_stop_loss_order(symbol, quantity, 'SELL', stop_loss_price)
                 
+                # Record the trade
                 trade_record = {
-                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'timestamp': trading_time.strftime('%Y-%m-%d %H:%M:%S'),
                     'symbol': symbol,
                     'action': 'SELL',
                     'quantity': quantity,
@@ -236,6 +354,7 @@ class HistoricalBreakoutTrader:
                 }
                 TRADES_TAKEN.append(trade_record)
                 
+                # Update position tracking
                 position_data = {'direction': 'SELL', 'quantity': quantity, 'price': current_price}
                 if sl_info:
                     position_data.update(sl_info)
@@ -244,14 +363,25 @@ class HistoricalBreakoutTrader:
             except Exception as e:
                 logger.error(f"{symbol} SELL FAILED: {e}")
 
-def initialize_candle_data():
+def initialize_candle_data(trading_date=None):
+    """Initialize the breakout candle data (5-minute candles from 9:15)"""
     global CANDLE_MAP, candles_initialized, SYMBOLS, SYMBOL_TO_TOKEN, QUANTITY_MAP, kite
     global INITIAL_CAPITAL, TOTAL_RISK_PERCENTAGE, FROM_TIME_BREAKOUT, AVAILABLE_CAPITAL
     
-    logger.info("Initializing breakout candle data...")
+    logger.info(f"Initializing breakout candles for date: {trading_date or 'today'}...")
+    
+    # For consistency with real-time, always use the exact same time range
+    # Use 9:15 to 9:20 for the 5-minute breakout candle (same as real-time)
+    from_time_exact = datetime.combine(trading_date or datetime.now().date(), 
+                                      datetime.strptime("09:15:00", "%H:%M:%S").time())
+    to_time_exact = datetime.combine(trading_date or datetime.now().date(), 
+                                    datetime.strptime("09:20:00", "%H:%M:%S").time())
     
     for symbol in SYMBOLS:
-        candles = kite.historical_data(SYMBOL_TO_TOKEN[symbol], FROM_TIME_BREAKOUT, datetime.now(), "5minute")
+        candles = kite.historical_data(SYMBOL_TO_TOKEN[symbol], from_time_exact, to_time_exact, "5minute")
+        if not candles:
+            logger.error(f"No candle data found for {symbol} on {trading_date or 'today'}")
+            continue
         first_candle = candles[0]
         CANDLE_MAP[symbol] = [first_candle]
         logger.info(f"{symbol} | O:{first_candle['open']:.2f} H:{first_candle['high']:.2f} "
@@ -300,12 +430,14 @@ def place_stop_loss_order(symbol, quantity, direction, stop_loss_price):
 def initialize_token_mappings():
     """Initialize symbol to token mappings"""
     global SYMBOLS, SYMBOL_TOKENS, TOKEN_TO_SYMBOL, SYMBOL_TO_TOKEN, AVAILABLE_CAPITAL, INITIAL_CAPITAL, kite
+    global HISTORICAL_DATA_CACHE
     
     instruments = kite.instruments("NSE")
     SYMBOL_TOKENS.clear()
     TOKEN_TO_SYMBOL.clear()
     SYMBOL_TO_TOKEN.clear()
     POSITIONS_TAKEN.clear()
+    HISTORICAL_DATA_CACHE.clear()
     
     for symbol in SYMBOLS:
         for instrument in instruments:
@@ -342,13 +474,15 @@ def closeAllPositions():
     global kite
     
     try:
+        # Get actual positions from Kite API
         positions = kite.positions()
         
+        # Filter for MIS (intraday) positions that are not zero
         open_positions = []
         for position in positions['net']:
             if (position['product'] == 'MIS' and 
                 position['quantity'] != 0 and 
-                position['tradingsymbol'] in [s for s in SYMBOLS]):
+                position['tradingsymbol'] in [s for s in SYMBOLS]):  # Only our trading symbols
                 open_positions.append(position)
         
         if not open_positions:
@@ -383,7 +517,7 @@ def closeAllPositions():
                 # )
                 order_id = 'N/A'
                 
-                # Record the closing trade
+                # Record the closing trade (use current time for exit trades)
                 close_trade_record = {
                     'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                     'symbol': symbol,
@@ -468,6 +602,7 @@ def save_trades_to_file():
     except Exception as e:
         logger.error(f"Failed to save trades to CSV: {e}")
     
+    # Save as JSON for more detailed format
     json_filename = f"trades_{timestamp}.json"
     try:
         with open(json_filename, 'w', encoding='utf-8') as jsonfile:
@@ -484,6 +619,7 @@ def save_trades_to_file():
     except Exception as e:
         logger.error(f"Failed to save trades to JSON: {e}")
     
+    # Print summary to console
     print_trade_summary()
 
 def print_trade_summary():
@@ -531,6 +667,7 @@ def main():
     parser.add_argument('--access_token', required=True, help='Kite Access Token')
     parser.add_argument('--symbols', required=True, help='Comma-separated list of symbols')
     parser.add_argument('--polling_interval', type=int, default=30, help='Polling interval in seconds (default: 30)')
+    parser.add_argument('--date', type=str, help='Trading date in YYYY-MM-DD format (default: today)')
     
     args = parser.parse_args()
     
@@ -538,10 +675,21 @@ def main():
     POLLING_INTERVAL = args.polling_interval
     
     SYMBOLS = [s.strip().upper() for s in args.symbols.split(',')]
+    
+    # Parse the trading date
+    trading_date = None
+    if args.date:
+        try:
+            trading_date = datetime.strptime(args.date, '%Y-%m-%d').date()
+        except ValueError:
+            logger.error(f"Invalid date format: {args.date}. Please use YYYY-MM-DD format.")
+            sys.exit(1)
+    
     logger.info(f"Symbols: {SYMBOLS}")
     logger.info(f"Polling interval: {POLLING_INTERVAL} seconds")
+    logger.info(f"Trading date: {trading_date or 'today (live trading)'}")
     
-    trader = HistoricalBreakoutTrader(args.api_key, args.access_token)
+    trader = HistoricalBreakoutTrader(args.api_key, args.access_token, trading_date)
     
     try:
         trader.start_trading()
@@ -550,6 +698,7 @@ def main():
         stop_trading_and_exit()
     except Exception as e:
         logger.error(f"Error: {e}")
+        # Save trades even if there's an unexpected error
         save_trades_to_file()
         stop_trading_and_exit()
 

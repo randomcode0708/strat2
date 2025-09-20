@@ -15,12 +15,12 @@ pip install --upgrade pip
 # Install dependencies
 pip install -r requirements.txt
 
-# source venv/bin/activate && python get_access_token.py  --request_token UYStbSXu6O0sr3mSnzu30BKIvAQDJFyW --api_key dsn6a9hdvuon0zve --api_secret 6iusnk6vx2ef5w3to3wppjxf53zufz6l
+# source venv/bin/activate && python get_access_token.py  --request_token 27WwZOB81agnkwae6PQTAx6vCYLD0QXH --api_key dsn6a9hdvuon0zve --api_secret 6iusnk6vx2ef5w3to3wppjxf53zufz6l
 # Access Token: 40qZJZeLNYuExaF2iGuQzP1ZBomNMdR1
 
-# source .venv/bin/activate && nohup python3 kite_websocket.py --api_key dsn6a9hdvuon0zve --access_token 4FIY6PJkTG5QgnsZdyTBL3nj3cx9mrgY --symbols "XXXX" --mode ltp > /dev/null 2>&1 &
+# source .venv/bin/activate && nohup python3 kite_websocket.py --api_key dsn6a9hdvuon0zve --access_token Zvd6ix0SOy9q43RyWl0RP6r09EaMucuI --symbols "XXXX" --mode ltp > /dev/null 2>&1 &
 
-# source .venv/bin/activate && nohup python3 historical_breakout_trader.py --api_key dsn6a9hdvuon0zve --access_token 4FIY6PJkTG5QgnsZdyTBL3nj3cx9mrgY --symbols "INDUSINDBK,TRENT,GODFRYPHLP,IRMENERGY,POONAWALLA,DENTA,HITECH,HERITGFOOD,BANCOINDIA,TATAINVEST,ZENTEC,NETWEB,LICHSGFIN,LAURUSLABS,SAMMAANCAP,AUROPHARMA,ETERNAL,HYUNDAI,PNBHOUSING,COFORGE,CAMS,ASHOKLEY,NYKAA,TVSMOTOR,DIXON,POLYCAB,SILVERBEES,VOLTAS,ABB,DRREDDY,SWIGGY,HDFCAMC,FLUOROCHEM,AXISBANK,NIFTYBEES,KOTAKBANK" > /dev/null 2>&1 &
+# source .venv/bin/activate && nohup python3 historical_breakout_trader.py --api_key dsn6a9hdvuon0zve --access_token Zvd6ix0SOy9q43RyWl0RP6r09EaMucuI --symbols "INDUSINDBK,TRENT,GODFRYPHLP,IRMENERGY,POONAWALLA,DENTA,HITECH,HERITGFOOD,BANCOINDIA,TATAINVEST,ZENTEC,NETWEB,LICHSGFIN,LAURUSLABS,SAMMAANCAP,AUROPHARMA,ETERNAL,HYUNDAI,PNBHOUSING,COFORGE,CAMS,ASHOKLEY,NYKAA,TVSMOTOR,DIXON,POLYCAB,SILVERBEES,VOLTAS,ABB,DRREDDY,SWIGGY,HDFCAMC,FLUOROCHEM,AXISBANK,NIFTYBEES,KOTAKBANK" > /dev/null 2>&1 &
 
 # source venv/bin/activate && python get_1min_data.py TCS 
 
