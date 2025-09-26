@@ -11,7 +11,7 @@ from kiteconnect import KiteConnect
 
 # Your credentials
 API_KEY = "dsn6a9hdvuon0zve"
-ACCESS_TOKEN = "Zvd6ix0SOy9q43RyWl0RP6r09EaMucuI"
+ACCESS_TOKEN = "PMOh6hPqIiyjLR2rT6l5ikRvY8CbErfb"
 
 def get_1min_data(symbol, days_back=1):
     """Get 1-minute historical data for a given symbol"""

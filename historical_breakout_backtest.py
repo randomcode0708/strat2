@@ -60,57 +60,52 @@ class HistoricalBreakoutTrader:
         # Initialize token mappings only (candle data will be initialized after market starts)
         initialize_token_mappings()
         
-        # Fetch all historical data once (works for both backtesting and live trading)
+        # Fetch all historical data once (backtesting mode only)
         logger.info("Fetching all historical data once...")
         self.fetch_all_historical_data()
         
-        # Initialize simulated time for backtesting
-        if self.trading_date != datetime.now().date():
-            self.simulated_time = datetime.combine(self.trading_date, datetime.strptime("09:21:00", "%H:%M:%S").time())
-            logger.info(f"Backtesting mode: Starting simulation at {self.simulated_time}")
+        # Initialize simulated time (always backtesting mode)
+        self.simulated_time = datetime.combine(self.trading_date, datetime.strptime("09:21:00", "%H:%M:%S").time())
+        logger.info(f"Backtesting mode: Starting simulation at {self.simulated_time}")
         
         while TRADING_ACTIVE:
             try:
-                # Use simulated time for backtesting, or current datetime for live trading
-                if self.trading_date != datetime.now().date():
-                    # Backtesting mode - use simulated time
-                    current_time = self.simulated_time
-                    logger.debug(f"Backtesting: Using simulated time {current_time}")
-                else:
-                    # Live trading mode
-                    current_time = datetime.now()
-                    logger.debug(f"Live trading: Using current time {current_time}")
+                # Always use simulated time (backtesting mode only)
+                if self.simulated_time is None:
+                    logger.error("Simulated time is None! This should not happen.")
+                    break
+                current_time = self.simulated_time
                 current_time_only = current_time.time()
+                logger.debug(f"Backtesting: Using simulated time {current_time}")
                 
                 # Initialize candle data only after market has started
                 if not candles_initialized:
                     logger.info(f"Market started, initializing candle data | Current Time: {current_time_only}")
                     initialize_candle_data(self.trading_date)
                 
-                # Check if strategy should end
-                if current_time_only >= STRATEGY_END:
-                    logger.info(f"Strategy ended | Current Time: {current_time_only}")
+                # Check if strategy should end when we reach 3:01 PM candle (use simulated time for backtest)
+                end_time = datetime.strptime("15:01:00", "%H:%M:%S").time()
+                logger.debug(f"Checking exit condition: {current_time_only} >= {end_time} = {current_time_only >= end_time}")
+                if current_time_only >= end_time:
+                    logger.info(f"Strategy ended - reached 3:01 PM candle | Simulated Time: {current_time_only}")
                     stop_trading_and_exit()
                     break
                 
-                # Check if all cached data has been processed (for backtesting)
-                if self.trading_date != datetime.now().date() and self.is_cached_data_exhausted(current_time):
+                # Check if all cached data has been processed
+                if self.is_cached_data_exhausted(current_time):
                     logger.info("All cached candle data has been processed. Ending trading session.")
                     stop_trading_and_exit()
                     break
                 
                 # Check for breakouts using cached data
                 self.check_breakouts_from_cached_data(current_time, self.trading_date)
-                if self.trading_date != datetime.now().date():
-                    # Backtesting mode - advance simulated time by 1 minute
-                    old_time = self.simulated_time
-                    self.simulated_time += timedelta(minutes=1)
-                    logger.info(f"Backtesting: Advanced time from {old_time.strftime('%H:%M:%S')} to {self.simulated_time.strftime('%H:%M:%S')}")
-                    # Add a small delay to make the progression visible
-                    time.sleep(0.1)
-                else:
-                    # Live trading mode - sleep until next minute boundary
-                    self.sleep_until_next_minute(current_time)
+                
+                # Advance simulated time by 1 minute (backtesting mode only)
+                old_time = self.simulated_time
+                self.simulated_time += timedelta(minutes=1)
+                logger.info(f"Backtesting: Advanced time from {old_time.strftime('%H:%M:%S')} to {self.simulated_time.strftime('%H:%M:%S')}")
+                # Add a small delay to make the progression visible
+                time.sleep(0.1)
                 
             except KeyboardInterrupt:
                 logger.info("Keyboard interrupt received, stopping...")
@@ -121,37 +116,16 @@ class HistoricalBreakoutTrader:
                 # Sleep for 30 seconds on error to avoid rapid error loops
                 time.sleep(30)
     
-    def sleep_until_next_minute(self, current_time):
-        """Sleep until the next minute boundary for efficient polling"""
-        # Calculate seconds until next minute
-        seconds_until_next_minute = 60 - current_time.second - (current_time.microsecond / 1000000.0)
-        
-        # Add a small buffer (1 second) to ensure the minute has fully passed
-        sleep_duration = seconds_until_next_minute + 1
-        
-        # Minimum sleep of 5 seconds to avoid too frequent polling
-        sleep_duration = max(5, sleep_duration)
-        
-        logger.debug(f"Sleeping {sleep_duration:.1f}s until next minute (current: {current_time.strftime('%H:%M:%S')})")
-        time.sleep(sleep_duration)
     
     def fetch_all_historical_data(self):
         """Fetch all historical data for the trading day once and cache it"""
         global HISTORICAL_DATA_CACHE, SYMBOL_TO_TOKEN
         
-        # Define the time range
+        # Define the time range (always backtesting mode)
         start_time = datetime.combine(self.trading_date, datetime.strptime("09:00:00", "%H:%M:%S").time())
+        end_time = datetime.combine(self.trading_date, datetime.strptime("15:30:00", "%H:%M:%S").time())
         
-        if self.trading_date != datetime.now().date():
-            # Backtesting mode - get full day data
-            end_time = datetime.combine(self.trading_date, datetime.strptime("15:30:00", "%H:%M:%S").time())
-            mode = "Backtesting"
-        else:
-            # Live trading mode - get data up to current time
-            end_time = datetime.now()
-            mode = "Live trading"
-        
-        logger.info(f"{mode} mode: Fetching historical data from {start_time} to {end_time}")
+        logger.info(f"Backtesting mode: Fetching historical data from {start_time} to {end_time}")
         
         for symbol in SYMBOLS:
             try:
@@ -290,9 +264,10 @@ class HistoricalBreakoutTrader:
                 stop_loss_price = breakout_candle['low']
                 sl_info = place_stop_loss_order(symbol, quantity, 'BUY', stop_loss_price)
                 
-                # Record the trade
+                # Record the trade using the candle timestamp (when breakout actually occurred)
+                candle_timestamp = current_candle['date'].replace(tzinfo=None)
                 trade_record = {
-                    'timestamp': trading_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'timestamp': candle_timestamp.strftime('%Y-%m-%d %H:%M:%S'),
                     'symbol': symbol,
                     'action': 'BUY',
                     'quantity': quantity,
@@ -338,9 +313,10 @@ class HistoricalBreakoutTrader:
                 stop_loss_price = breakout_candle['high']
                 sl_info = place_stop_loss_order(symbol, quantity, 'SELL', stop_loss_price)
                 
-                # Record the trade
+                # Record the trade using the candle timestamp (when breakout actually occurred)
+                candle_timestamp = current_candle['date'].replace(tzinfo=None)
                 trade_record = {
-                    'timestamp': trading_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'timestamp': candle_timestamp.strftime('%Y-%m-%d %H:%M:%S'),
                     'symbol': symbol,
                     'action': 'SELL',
                     'quantity': quantity,

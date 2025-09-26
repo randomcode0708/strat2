@@ -15,15 +15,16 @@ pip install --upgrade pip
 # Install dependencies
 pip install -r requirements.txt
 
-# source venv/bin/activate && python get_access_token.py  --request_token 27WwZOB81agnkwae6PQTAx6vCYLD0QXH --api_key dsn6a9hdvuon0zve --api_secret 6iusnk6vx2ef5w3to3wppjxf53zufz6l
+# source venv/bin/activate && python get_access_token.py  --request_token BRTcVVKXP9pdtcOqvii8qW0lfmVlJ75A --api_key dsn6a9hdvuon0zve --api_secret 6iusnk6vx2ef5w3to3wppjxf53zufz6l
 # Access Token: 40qZJZeLNYuExaF2iGuQzP1ZBomNMdR1
 
-# source .venv/bin/activate && nohup python3 kite_websocket.py --api_key dsn6a9hdvuon0zve --access_token Zvd6ix0SOy9q43RyWl0RP6r09EaMucuI --symbols "XXXX" --mode ltp > /dev/null 2>&1 &
+# source .venv/bin/activate && nohup python3 kite_websocket.py --api_key dsn6a9hdvuon0zve --access_token PMOh6hPqIiyjLR2rT6l5ikRvY8CbErfb --symbols "XXXX" --mode ltp > /dev/null 2>&1 &
 
-# source .venv/bin/activate && nohup python3 historical_breakout_trader.py --api_key dsn6a9hdvuon0zve --access_token Zvd6ix0SOy9q43RyWl0RP6r09EaMucuI --symbols "INDUSINDBK,TRENT,GODFRYPHLP,IRMENERGY,POONAWALLA,DENTA,HITECH,HERITGFOOD,BANCOINDIA,TATAINVEST,ZENTEC,NETWEB,LICHSGFIN,LAURUSLABS,SAMMAANCAP,AUROPHARMA,ETERNAL,HYUNDAI,PNBHOUSING,COFORGE,CAMS,ASHOKLEY,NYKAA,TVSMOTOR,DIXON,POLYCAB,SILVERBEES,VOLTAS,ABB,DRREDDY,SWIGGY,HDFCAMC,FLUOROCHEM,AXISBANK,NIFTYBEES,KOTAKBANK" > /dev/null 2>&1 &
+# source .venv/bin/activate && nohup python3 historical_breakout_trader.py --api_key dsn6a9hdvuon0zve --access_token PMOh6hPqIiyjLR2rT6l5ikRvY8CbErfb --symbols "PAGEIND,BSE,INDUSINDBK,TRENT,VBL,ATGL,SHREEPUSHK,ADANIGREEN,BORORENEW,NETWEB,ADANIENSOL,ANANTRAJ,HUDCO,ADANIENT,MUTHOOTFIN,NBCC,SILVERBEES,AVANTEL,ENRIN,FLUOROCHEM,MRF,ETERNAL,BAJFINANCE,AXISBANK" > /dev/null 2>&1 &
 
-# source venv/bin/activate && python get_1min_data.py TCS 
+#/home/masoodfortrade/strat2/historical_breakout_trader.log
+#/home/masoodfortrade/strat2/trades_20250923_150005.csv
 
-# source .venv/bin/activate && nohup python3 candle_builder.py --api_key dsn6a9hdvuon0zve --access_token WlobNvvYCVq6fxl6fgEBV2STVTZFK0YB --symbols "XXXXXXX" > /dev/null 2>&1 &
+# source venv/bin/activate && python get_1min_data.py NBCC 2
 
-# source .venv/bin/activate && nohup python3 live_candle_trader.py --api_key dsn6a9hdvuon0zve --access_token WlobNvvYCVq6fxl6fgEBV2STVTZFK0YB --symbols "XXXXXXX" > /dev/null 2>&1 &
+# source venv/bin/activate && python historical_breakout_backtest.py --api_key dsn6a9hdvuon0zve --access_token PMOh6hPqIiyjLR2rT6l5ikRvY8CbErfb --date 2025-09-23 --symbols "PAGEIND,BSE,INDUSINDBK,TRENT,VBL,ATGL,SHREEPUSHK,ADANIGREEN,BORORENEW,NETWEB,ADANIENSOL,ANANTRAJ,HUDCO,ADANIENT,MUTHOOTFIN,NBCC,SILVERBEES,AVANTEL,ENRIN,FLUOROCHEM,MRF,ETERNAL,BAJFINANCE,AXISBANK"
